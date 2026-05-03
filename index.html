@@ -1,0 +1,2180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>달항아리 Dalhangari — 일상에 머무는 단정한 그릇</title>
+
+  <!-- Pretendard (한글 본문) -->
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+
+  <!-- Tailwind / React / Babel -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- TossPayments 결제위젯 SDK v2 -->
+  <script src="https://js.tosspayments.com/v2/standard"></script>
+
+  <script>
+    // Tailwind 확장 설정 — 브랜드 컬러 / 폰트
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'brand-bg':     '#FAF7F2', // 따뜻한 오프화이트
+            'brand-card':   '#FFFFFF',
+            'brand-ink':    '#2A2520', // 진한 차콜
+            'brand-mute':   '#857B6E', // 미디엄 그레이브라운
+            'brand-accent': '#1F1B17', // 매트 블랙
+            'brand-earth':  '#6B4F3A', // 흙갈색
+            'brand-line':   '#E8E2D8', // 베이지빛 라이트 그레이
+          },
+          fontFamily: {
+            sans: ['"Pretendard Variable"', 'Pretendard', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'Roboto', 'sans-serif'],
+            serif: ['Georgia', '"Times New Roman"', 'serif'],
+          },
+        }
+      }
+    }
+  </script>
+
+  <style>
+    html, body { background-color: #FAF7F2; }
+    body {
+      color: #2A2520;
+      word-break: keep-all;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    /* 부드러운 기본 트랜지션 */
+    * { transition-property: color, background-color, border-color, transform, box-shadow, opacity; transition-duration: 200ms; transition-timing-function: ease-out; }
+
+    /* 카드 호버 이미지 줌 */
+    .product-card .product-image { transition: transform 600ms ease-out; }
+    .product-card:hover .product-image { transform: scale(1.04); }
+
+    /* 모바일 메뉴 슬라이드 */
+    .mobile-menu-enter { transform: translateX(100%); }
+    .mobile-menu-enter-active { transform: translateX(0); transition: transform 250ms ease-out; }
+
+    /* 모달/메뉴 페이드 */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in { animation: fadeIn 180ms ease-out; }
+
+    /* 가로 스크롤 숨김 */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* 영문 세리프 우아한 디테일 */
+    .font-serif-en { font-family: Georgia, 'Times New Roman', serif; font-style: italic; letter-spacing: 0.02em; }
+  </style>
+</head>
+<body class="font-sans bg-brand-bg text-brand-ink">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="env,react">
+    // ========================================
+    // ⚛️  React Hooks
+    // ========================================
+    const { useState, useEffect, useReducer, useContext, createContext, useMemo, useRef, useCallback } = React;
+
+    // ========================================
+    // 🌐  API config (서버는 같은 origin)
+    // ========================================
+    const API_BASE_URL = '/api';
+    const TOKEN_KEY = 'dalhangari-token';
+
+    async function apiFetch(endpoint, { method = 'GET', body, auth = false } = {}) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (auth) {
+        const t = localStorage.getItem(TOKEN_KEY);
+        if (t) headers.Authorization = `Bearer ${t}`;
+      }
+      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.success === false) {
+        throw new Error(json?.message || `요청 실패 (HTTP ${res.status})`);
+      }
+      return json.data;
+    }
+
+    const formatKRW = (n) => `${Number(n).toLocaleString('ko-KR')}원`;
+
+    // ========================================
+    // 💳  TossPayments — 결제위젯 설정
+    // ========================================
+    // 클라이언트 키 (공개 키 — 노출되어도 OK).
+    // 운영 전환 시 live_gck_... 키로 교체하라.
+    // 시크릿 키(test_gsk_/live_gsk_)는 절대 클라이언트에 두지 말 것.
+    const TOSS_CLIENT_KEY = 'test_gck_docs_Ovk5rk1EwkEbP0W43n07xlzm';
+
+    // 결제용 고유 orderId 생성 (영문/숫자/-/_ 6~64자)
+    function generateOrderId() {
+      const rand = Math.random().toString(36).slice(2, 10);
+      return `dalhangari-${Date.now()}-${rand}`;
+    }
+
+    // 해시 라우팅 환경에서 successUrl/failUrl 파라미터를 안전하게 파싱.
+    // 토스 SDK는 successUrl을 표준 URL 파싱 규칙대로 다루므로
+    //   paymentKey/orderId/amount 등은 location.search(해시 앞)에 붙고,
+    //   SDK가 추가하는 paymentType 등은 해시 안의 query string에 들어간다.
+    // 둘 다 병합해서 읽는다.
+    function parseHashQuery() {
+      const params = new URLSearchParams();
+      const search = new URLSearchParams(window.location.search);
+      search.forEach((v, k) => params.set(k, v));
+      const hash = window.location.hash;
+      const qIdx = hash.indexOf('?');
+      if (qIdx !== -1) {
+        const inner = new URLSearchParams(hash.slice(qIdx + 1));
+        inner.forEach((v, k) => params.set(k, v));
+      }
+      return params;
+    }
+
+    // ========================================
+    // 🔀  Hash Router (lightweight)
+    // ========================================
+    const RouterContext = createContext(null);
+
+    function getHashPath() {
+      const h = window.location.hash || '#/';
+      // 해시 안에 ?query가 있으면 path 부분만 추출 (예: '#/payment/success?paymentType=NORMAL' → '/payment/success')
+      const stripped = h.replace(/^#/, '').split('?')[0];
+      return stripped || '/';
+    }
+
+    function Router({ children }) {
+      const [path, setPath] = useState(getHashPath());
+      useEffect(() => {
+        const onHash = () => {
+          setPath(getHashPath());
+          window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        };
+        window.addEventListener('hashchange', onHash);
+        return () => window.removeEventListener('hashchange', onHash);
+      }, []);
+      return (
+        <RouterContext.Provider value={{ path, navigate: (to) => { window.location.hash = '#' + to; } }}>
+          {children}
+        </RouterContext.Provider>
+      );
+    }
+
+    function useRouter() { return useContext(RouterContext); }
+
+    function matchRoute(pattern, path) {
+      const pa = pattern.split('/').filter(Boolean);
+      const pb = path.split('/').filter(Boolean);
+      if (pa.length !== pb.length) return null;
+      const params = {};
+      for (let i = 0; i < pa.length; i++) {
+        if (pa[i].startsWith(':')) params[pa[i].slice(1)] = decodeURIComponent(pb[i]);
+        else if (pa[i] !== pb[i]) return null;
+      }
+      return params;
+    }
+
+    function Link({ to, children, className = '', ...rest }) {
+      const { navigate } = useRouter();
+      return (
+        <a
+          href={'#' + to}
+          className={className}
+          onClick={(e) => { e.preventDefault(); navigate(to); }}
+          {...rest}
+        >
+          {children}
+        </a>
+      );
+    }
+
+    // ========================================
+    // 🛒  Cart Context (useReducer + localStorage)
+    // ========================================
+    const CART_KEY = 'dalhangari-cart';
+    const WISH_KEY = 'dalhangari-wishlist';
+
+    const CartContext = createContext(null);
+
+    function cartReducer(state, action) {
+      switch (action.type) {
+        case 'INIT':
+          return action.payload || [];
+        case 'ADD': {
+          const { id, qty = 1 } = action;
+          const existing = state.find(it => it.id === id);
+          if (existing) {
+            return state.map(it => it.id === id ? { ...it, qty: it.qty + qty } : it);
+          }
+          return [...state, { id, qty }];
+        }
+        case 'SET_QTY':
+          return state.map(it => it.id === action.id ? { ...it, qty: Math.max(1, action.qty) } : it);
+        case 'REMOVE':
+          return state.filter(it => it.id !== action.id);
+        case 'CLEAR':
+          return [];
+        default:
+          return state;
+      }
+    }
+
+    function CartProvider({ children }) {
+      const [cart, dispatch] = useReducer(cartReducer, []);
+      const [wishlist, setWishlist] = useState([]);
+      const [hydrated, setHydrated] = useState(false);
+
+      // 초기 로드 (localStorage)
+      useEffect(() => {
+        try {
+          const raw = localStorage.getItem(CART_KEY);
+          if (raw) dispatch({ type: 'INIT', payload: JSON.parse(raw) });
+        } catch (_) {}
+        try {
+          const raw = localStorage.getItem(WISH_KEY);
+          if (raw) setWishlist(JSON.parse(raw));
+        } catch (_) {}
+        setHydrated(true);
+      }, []);
+
+      // 저장
+      useEffect(() => {
+        if (!hydrated) return;
+        try { localStorage.setItem(CART_KEY, JSON.stringify(cart)); } catch (_) {}
+      }, [cart, hydrated]);
+      useEffect(() => {
+        if (!hydrated) return;
+        try { localStorage.setItem(WISH_KEY, JSON.stringify(wishlist)); } catch (_) {}
+      }, [wishlist, hydrated]);
+
+      const toggleWish = useCallback((id) => {
+        setWishlist(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      }, []);
+
+      const totalCount = cart.reduce((s, it) => s + it.qty, 0);
+
+      const value = useMemo(() => ({
+        cart, dispatch, totalCount, wishlist, toggleWish,
+      }), [cart, totalCount, wishlist, toggleWish]);
+
+      return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
+    }
+
+    function useCart() { return useContext(CartContext); }
+
+    // ========================================
+    // 📦  Products Context (서버에서 fetch)
+    // ========================================
+    const ProductsContext = createContext(null);
+
+    function ProductsProvider({ children }) {
+      const [products, setProducts] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+
+      const reload = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const data = await apiFetch('/products');
+          setProducts(data || []);
+        } catch (err) {
+          setError(err.message || '상품을 불러오지 못했습니다.');
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => { reload(); }, [reload]);
+
+      const productsById = useMemo(() => {
+        const m = {};
+        for (const p of products) m[p.id] = p;
+        return m;
+      }, [products]);
+
+      const value = useMemo(() => ({
+        products, productsById, loading, error, reload,
+      }), [products, productsById, loading, error, reload]);
+
+      return <ProductsContext.Provider value={value}>{children}</ProductsContext.Provider>;
+    }
+
+    function useProducts() { return useContext(ProductsContext); }
+
+    // ========================================
+    // 🔐  Auth Context (JWT, localStorage)
+    // ========================================
+    const AuthContext = createContext(null);
+
+    function AuthProvider({ children }) {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);   // 초기 토큰 검증 동안 true
+      const [authModal, setAuthModal] = useState(null); // null | 'login' | 'signup'
+
+      // 페이지 로드 시 저장된 토큰으로 사용자 정보 복원
+      useEffect(() => {
+        const t = localStorage.getItem(TOKEN_KEY);
+        if (!t) { setLoading(false); return; }
+        apiFetch('/auth/me', { auth: true })
+          .then((data) => setUser(data.user))
+          .catch(() => { localStorage.removeItem(TOKEN_KEY); })
+          .finally(() => setLoading(false));
+      }, []);
+
+      const signup = useCallback(async ({ email, password, name }) => {
+        const data = await apiFetch('/auth/signup', { method: 'POST', body: { email, password, name } });
+        localStorage.setItem(TOKEN_KEY, data.token);
+        setUser(data.user);
+        return data.user;
+      }, []);
+
+      const login = useCallback(async ({ email, password }) => {
+        const data = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
+        localStorage.setItem(TOKEN_KEY, data.token);
+        setUser(data.user);
+        return data.user;
+      }, []);
+
+      const logout = useCallback(() => {
+        localStorage.removeItem(TOKEN_KEY);
+        setUser(null);
+        // 로그인 필요 페이지(/cart, /checkout, /mypage, /admin)에 머무르지 않도록 홈으로
+        window.location.hash = '#/';
+      }, []);
+
+      const value = useMemo(() => ({
+        user, loading, signup, login, logout,
+        authModal, openLogin: () => setAuthModal('login'),
+        openSignup: () => setAuthModal('signup'),
+        closeAuth: () => setAuthModal(null),
+      }), [user, loading, signup, login, logout, authModal]);
+
+      return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+    }
+
+    function useAuth() { return useContext(AuthContext); }
+
+    // ========================================
+    // 🎨  Design System Components
+    // ========================================
+    function Button({ variant = 'primary', size = 'md', className = '', children, ...rest }) {
+      const base = 'inline-flex items-center justify-center font-medium rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg disabled:opacity-50 disabled:cursor-not-allowed';
+      const sizes = {
+        sm: 'px-4 py-2 text-sm',
+        md: 'px-6 py-3 text-sm tracking-wide',
+        lg: 'px-8 py-4 text-base tracking-wide',
+      };
+      const variants = {
+        primary:   'bg-brand-accent text-brand-bg hover:bg-brand-ink',
+        secondary: 'bg-transparent text-brand-ink border border-brand-ink hover:bg-brand-ink hover:text-brand-bg',
+        ghost:     'bg-transparent text-brand-ink hover:bg-brand-line',
+        danger:    'bg-transparent text-brand-mute hover:text-brand-ink underline-offset-4 hover:underline',
+      };
+      return (
+        <button className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} {...rest}>
+          {children}
+        </button>
+      );
+    }
+
+    function Badge({ children, className = '' }) {
+      return (
+        <span className={`inline-flex items-center justify-center text-[10px] font-medium leading-none px-1.5 min-w-[18px] h-[18px] rounded-full bg-brand-accent text-brand-bg ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    function Card({ children, className = '' }) {
+      return (
+        <div className={`bg-brand-card border border-brand-line ${className}`}>{children}</div>
+      );
+    }
+
+    function QtyStepper({ value, onChange, min = 1, max = 99 }) {
+      return (
+        <div className="inline-flex items-center border border-brand-line">
+          <button
+            aria-label="수량 줄이기"
+            onClick={() => onChange(Math.max(min, value - 1))}
+            className="w-9 h-9 flex items-center justify-center text-brand-ink hover:bg-brand-line"
+            disabled={value <= min}
+          >−</button>
+          <span className="w-10 h-9 flex items-center justify-center text-sm tabular-nums">{value}</span>
+          <button
+            aria-label="수량 늘리기"
+            onClick={() => onChange(Math.min(max, value + 1))}
+            className="w-9 h-9 flex items-center justify-center text-brand-ink hover:bg-brand-line"
+            disabled={value >= max}
+          >+</button>
+        </div>
+      );
+    }
+
+    // 아이콘 (inline SVG)
+    const Icon = {
+      Search: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-5 h-5'} aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>),
+      Heart: ({ filled, className }) => (<svg viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.6" className={className||'w-5 h-5'} aria-hidden="true"><path d="M12 21s-7-4.35-7-10a4 4 0 0 1 7-2.65A4 4 0 0 1 19 11c0 5.65-7 10-7 10Z"/></svg>),
+      Bag: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-5 h-5'} aria-hidden="true"><path d="M5 8h14l-1 12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 8Z"/><path d="M9 8V6a3 3 0 1 1 6 0v2"/></svg>),
+      Menu: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-6 h-6'} aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>),
+      Close: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-6 h-6'} aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>),
+      ArrowRight: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-4 h-4'} aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>),
+      ArrowLeft: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-4 h-4'} aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>),
+      Trash: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-4 h-4'} aria-hidden="true"><path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2m-7 0v13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V7"/></svg>),
+      EmptyBag: (p) => (<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.4" className={p.className||'w-16 h-16'} aria-hidden="true"><path d="M14 22h36l-3 30a4 4 0 0 1-4 3.5H21a4 4 0 0 1-4-3.5L14 22Z"/><path d="M24 22v-4a8 8 0 1 1 16 0v4"/><path d="M28 36h8M32 32v8" opacity="0.4"/></svg>),
+      User: (p) => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={p.className||'w-5 h-5'} aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>),
+    };
+
+    // ========================================
+    // 🔐  Auth Modal — 로그인 / 회원가입
+    // ========================================
+    function AuthModal() {
+      const { authModal, closeAuth, login, signup, openLogin, openSignup } = useAuth();
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [name, setName] = useState('');
+      const [error, setError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+
+      // 모드가 바뀔 때 폼 리셋
+      useEffect(() => {
+        if (authModal) { setEmail(''); setPassword(''); setName(''); setError(''); }
+      }, [authModal]);
+
+      // ESC로 닫기
+      useEffect(() => {
+        if (!authModal) return;
+        const onKey = (e) => { if (e.key === 'Escape') closeAuth(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [authModal, closeAuth]);
+
+      if (!authModal) return null;
+      const isLogin = authModal === 'login';
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!email || !password) { setError('이메일과 비밀번호를 입력해 주세요.'); return; }
+        if (password.length < 8) { setError('비밀번호는 8자 이상이어야 합니다.'); return; }
+        setSubmitting(true); setError('');
+        try {
+          if (isLogin) await login({ email, password });
+          else await signup({ email, password, name: name.trim() || undefined });
+          closeAuth();
+        } catch (err) {
+          setError(err.message || '요청을 처리하지 못했습니다.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+          <div className="absolute inset-0 bg-brand-ink/40" onClick={closeAuth} />
+          <div className="relative h-full flex items-center justify-center px-5">
+            <div className="bg-brand-bg border border-brand-line w-full max-w-md p-7 sm:p-8 shadow-xl animate-fade-in">
+              <div className="flex items-center justify-between mb-1">
+                <h2 id="auth-title" className="text-xl text-brand-accent">
+                  {isLogin ? '로그인' : '회원가입'}
+                </h2>
+                <button onClick={closeAuth} aria-label="닫기" className="p-1 hover:bg-brand-line rounded-full">
+                  <Icon.Close className="w-5 h-5"/>
+                </button>
+              </div>
+              <p className="text-xs tracking-widest text-brand-mute uppercase mb-6">
+                {isLogin ? 'Welcome back' : 'Join Dalhangari'}
+              </p>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {!isLogin && (
+                  <div>
+                    <label className="block text-xs text-brand-mute mb-1.5">이름 (선택)</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="홍길동"
+                      autoComplete="name"
+                      className="w-full h-11 px-3 bg-brand-card border border-brand-line text-brand-ink focus:outline-none focus:border-brand-ink"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs text-brand-mute mb-1.5">이메일</label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    className="w-full h-11 px-3 bg-brand-card border border-brand-line text-brand-ink focus:outline-none focus:border-brand-ink"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-brand-mute mb-1.5">비밀번호 <span className="text-brand-mute/70">(8자 이상)</span></label>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    autoComplete={isLogin ? 'current-password' : 'new-password'}
+                    className="w-full h-11 px-3 bg-brand-card border border-brand-line text-brand-ink focus:outline-none focus:border-brand-ink"
+                  />
+                </div>
+
+                {error && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 px-3 py-2">
+                    {error}
+                  </div>
+                )}
+
+                <Button type="submit" size="lg" className="w-full" disabled={submitting}>
+                  {submitting ? '처리 중…' : (isLogin ? '로그인' : '회원가입')}
+                </Button>
+              </form>
+
+              <div className="mt-6 text-center text-xs text-brand-mute">
+                {isLogin ? (
+                  <>아직 회원이 아니신가요?{' '}
+                    <button onClick={openSignup} className="text-brand-accent underline-offset-4 hover:underline">회원가입</button>
+                  </>
+                ) : (
+                  <>이미 회원이신가요?{' '}
+                    <button onClick={openLogin} className="text-brand-accent underline-offset-4 hover:underline">로그인</button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩  Layout — Header / Footer
+    // ========================================
+    const NAV_ITEMS = [
+      { label: '전체 그릇', to: '/' },
+      { label: '컬렉션', to: '/' },
+      { label: '작가 이야기', to: '/' },
+      { label: '매거진', to: '/' },
+    ];
+
+    function UserMenu() {
+      const { user, logout, openLogin } = useAuth();
+      const [open, setOpen] = useState(false);
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', onDoc);
+        return () => document.removeEventListener('mousedown', onDoc);
+      }, [open]);
+
+      if (!user) {
+        return (
+          <button
+            onClick={openLogin}
+            aria-label="로그인"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 h-9 border border-brand-line text-sm text-brand-ink hover:border-brand-ink"
+          >
+            <Icon.User className="w-4 h-4"/>
+            <span>로그인</span>
+          </button>
+        );
+      }
+
+      const initial = (user.name || user.email).slice(0, 1).toUpperCase();
+
+      return (
+        <div className="relative" ref={ref}>
+          <button
+            onClick={() => setOpen(v => !v)}
+            aria-label={`${user.name || user.email} 메뉴`}
+            aria-expanded={open}
+            className="inline-flex items-center gap-2 px-2 sm:px-3 h-9 border border-brand-line hover:border-brand-ink"
+          >
+            <span className="w-6 h-6 rounded-full bg-brand-accent text-brand-bg flex items-center justify-center text-[11px] font-medium">{initial}</span>
+            <span className="hidden sm:inline text-sm text-brand-ink max-w-[110px] truncate">{user.name || user.email.split('@')[0]}</span>
+          </button>
+          {open && (
+            <div className="absolute right-0 mt-2 w-56 bg-brand-bg border border-brand-line shadow-lg animate-fade-in" role="menu">
+              <div className="p-3 border-b border-brand-line">
+                <p className="text-sm text-brand-ink truncate">{user.name || '회원'}</p>
+                <p className="text-xs text-brand-mute truncate">{user.email}</p>
+              </div>
+              <Link
+                to="/mypage"
+                onClick={() => setOpen(false)}
+                className="block w-full text-left px-3 py-2.5 text-sm text-brand-ink hover:bg-brand-line"
+                role="menuitem"
+              >마이페이지</Link>
+              {user.isAdmin && (
+                <Link
+                  to="/admin"
+                  onClick={() => setOpen(false)}
+                  className="block w-full text-left px-3 py-2.5 text-sm text-brand-ink hover:bg-brand-line border-t border-brand-line"
+                  role="menuitem"
+                >관리자 · 상품 등록</Link>
+              )}
+              <button
+                onClick={() => { setOpen(false); logout(); }}
+                className="w-full text-left px-3 py-2.5 text-sm text-brand-ink hover:bg-brand-line border-t border-brand-line"
+                role="menuitem"
+              >로그아웃</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Header() {
+      const { totalCount, wishlist } = useCart();
+      const { user, openLogin } = useAuth();
+      const [menuOpen, setMenuOpen] = useState(false);
+      const { path } = useRouter();
+
+      // 라우트 변경 시 모바일 메뉴 닫기
+      useEffect(() => { setMenuOpen(false); }, [path]);
+
+      return (
+        <header className="sticky top-0 z-40 bg-brand-bg/90 backdrop-blur border-b border-brand-line">
+          <div className="max-w-7xl mx-auto px-5 lg:px-10">
+            <div className="h-16 lg:h-20 flex items-center justify-between gap-4">
+              {/* 좌: 로고 */}
+              <Link to="/" className="flex items-baseline gap-2 group" aria-label="달항아리 홈">
+                <span className="font-serif-en text-xl lg:text-2xl text-brand-accent">Dalhangari</span>
+                <span className="hidden sm:inline text-sm text-brand-mute tracking-widest">달항아리</span>
+              </Link>
+
+              {/* 중앙: 데스크톱 네비 */}
+              <nav className="hidden md:flex items-center gap-9" aria-label="주 메뉴">
+                {NAV_ITEMS.map((it, i) => (
+                  <Link key={i} to={it.to} className="text-sm text-brand-ink hover:text-brand-earth tracking-wide">
+                    {it.label}
+                  </Link>
+                ))}
+              </nav>
+
+              {/* 우: 아이콘 */}
+              <div className="flex items-center gap-1.5 sm:gap-3">
+                <button aria-label="검색" className="p-2 hover:bg-brand-line rounded-full text-brand-ink">
+                  <Icon.Search />
+                </button>
+                <button aria-label={`찜 ${wishlist.length}개`} className="p-2 hover:bg-brand-line rounded-full text-brand-ink relative">
+                  <Icon.Heart filled={wishlist.length > 0} />
+                  {wishlist.length > 0 && (
+                    <span className="absolute top-1 right-1"><Badge>{wishlist.length}</Badge></span>
+                  )}
+                </button>
+                {user && (
+                  <Link to="/cart" aria-label={`장바구니 ${totalCount}개`} className="p-2 hover:bg-brand-line rounded-full text-brand-ink relative inline-flex">
+                    <Icon.Bag />
+                    {totalCount > 0 && (
+                      <span className="absolute top-1 right-1"><Badge>{totalCount}</Badge></span>
+                    )}
+                  </Link>
+                )}
+                <UserMenu />
+                <button
+                  className="md:hidden p-2 hover:bg-brand-line rounded-full text-brand-ink"
+                  aria-label="메뉴 열기"
+                  onClick={() => setMenuOpen(true)}
+                >
+                  <Icon.Menu />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 모바일 메뉴 */}
+          {menuOpen && (
+            <div className="md:hidden fixed inset-0 z-50">
+              <div className="absolute inset-0 bg-brand-ink/30" onClick={() => setMenuOpen(false)} />
+              <div className="absolute top-0 right-0 h-full w-72 bg-brand-bg shadow-xl mobile-menu-enter mobile-menu-enter-active flex flex-col">
+                <div className="h-16 flex items-center justify-between px-5 border-b border-brand-line">
+                  <span className="font-serif-en text-lg">Dalhangari</span>
+                  <button aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)} className="p-2 hover:bg-brand-line rounded-full">
+                    <Icon.Close />
+                  </button>
+                </div>
+                <nav className="flex flex-col p-5 gap-1" aria-label="모바일 메뉴">
+                  {NAV_ITEMS.map((it, i) => (
+                    <Link key={i} to={it.to} className="py-3 text-base border-b border-brand-line">
+                      {it.label}
+                    </Link>
+                  ))}
+                  {!user && (
+                    <button
+                      onClick={() => { setMenuOpen(false); openLogin(); }}
+                      className="py-3 text-base text-left text-brand-accent"
+                    >로그인 / 회원가입</button>
+                  )}
+                </nav>
+              </div>
+            </div>
+          )}
+        </header>
+      );
+    }
+
+    function Footer() {
+      return (
+        <footer className="mt-24 border-t border-brand-line">
+          <div className="max-w-7xl mx-auto px-5 lg:px-10 py-14 grid gap-10 md:grid-cols-4 text-sm">
+            <div className="md:col-span-2">
+              <div className="flex items-baseline gap-2 mb-3">
+                <span className="font-serif-en text-2xl text-brand-accent">Dalhangari</span>
+                <span className="text-brand-mute tracking-widest text-xs">달항아리</span>
+              </div>
+              <p className="text-brand-mute leading-relaxed max-w-md">
+                흙과 시간이 빚어낸 단정한 그릇.<br />
+                작은 공방의 정성을 식탁 위로 전합니다.
+              </p>
+            </div>
+            <div>
+              <h4 className="text-xs tracking-widest text-brand-mute mb-3">회사</h4>
+              <ul className="space-y-2">
+                <li><a href="#/" className="hover:text-brand-earth">회사 소개</a></li>
+                <li><a href="#/" className="hover:text-brand-earth">작가 입점 문의</a></li>
+                <li><a href="#/" className="hover:text-brand-earth">매거진</a></li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-xs tracking-widest text-brand-mute mb-3">고객센터</h4>
+              <ul className="space-y-2">
+                <li className="text-brand-ink">평일 10:00 — 17:00</li>
+                <li className="text-brand-mute">02-000-0000</li>
+                <li><a href="#/" className="hover:text-brand-earth">자주 묻는 질문</a></li>
+                <li><a href="#/" className="hover:text-brand-earth">이용약관 · 개인정보</a></li>
+              </ul>
+            </div>
+          </div>
+          <div className="border-t border-brand-line">
+            <div className="max-w-7xl mx-auto px-5 lg:px-10 py-5 text-xs text-brand-mute flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <span>© 2026 Dalhangari. Handcrafted in Korea.</span>
+              <span className="font-serif-en">Quiet things, made by hand.</span>
+            </div>
+          </div>
+        </footer>
+      );
+    }
+
+    // ========================================
+    // 🍶  Product Card (재사용)
+    // ========================================
+    function ProductCard({ product }) {
+      const { wishlist, toggleWish } = useCart();
+      const liked = wishlist.includes(product.id);
+      return (
+        <Link
+          to={`/product/${product.id}`}
+          className="product-card group block bg-brand-card border border-brand-line hover:shadow-lg hover:-translate-y-0.5"
+          aria-label={`${product.name} 상세 보기`}
+        >
+          <div className="relative aspect-square overflow-hidden bg-brand-line">
+            <img
+              src={product.image}
+              alt={`${product.name} — ${product.artist}`}
+              loading="lazy"
+              className="product-image w-full h-full object-cover"
+            />
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleWish(product.id); }}
+              aria-label={liked ? '찜 해제' : '찜하기'}
+              className={`absolute top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center backdrop-blur bg-white/70 hover:bg-white ${liked ? 'text-red-700' : 'text-brand-ink'}`}
+            >
+              <Icon.Heart filled={liked} className="w-[18px] h-[18px]" />
+            </button>
+          </div>
+          <div className="p-5">
+            <p className="text-[11px] tracking-widest text-brand-mute uppercase mb-1">{product.category}</p>
+            <h3 className="text-base text-brand-ink mb-1">{product.name}</h3>
+            <p className="text-sm text-brand-mute mb-3">{product.artist}</p>
+            <p className="text-sm tabular-nums">{formatKRW(product.price)}</p>
+          </div>
+        </Link>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Home
+    // ========================================
+    function ProductGridSkeleton() {
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="bg-brand-card border border-brand-line">
+              <div className="aspect-square bg-brand-line animate-pulse" />
+              <div className="p-5 space-y-2">
+                <div className="h-2 w-12 bg-brand-line animate-pulse" />
+                <div className="h-4 w-2/3 bg-brand-line animate-pulse" />
+                <div className="h-3 w-1/3 bg-brand-line animate-pulse" />
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function HomePage() {
+      const { products, loading, error, reload } = useProducts();
+      return (
+        <main>
+          {/* Hero */}
+          <section className="relative h-[68vh] min-h-[460px] max-h-[720px] overflow-hidden">
+            <img
+              src="./images/hero.jpg"
+              alt="한국 전통 도자기가 어우러진 정갈한 스틸라이프"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-r from-brand-bg/80 via-brand-bg/30 to-transparent" />
+            <div className="relative max-w-7xl mx-auto h-full px-5 lg:px-10 flex items-center">
+              <div className="max-w-xl">
+                <p className="font-serif-en text-sm text-brand-earth mb-5 tracking-wider">— Dalhangari Spring Selection</p>
+                <h1 className="text-4xl sm:text-5xl lg:text-6xl text-brand-accent leading-[1.2] font-medium">
+                  일상에 머무는<br/>단정한 그릇
+                </h1>
+                <p className="mt-6 text-base sm:text-lg text-brand-ink/80 leading-relaxed">
+                  흙과 손의 시간을 담은 작은 공방의 그릇들.<br className="hidden sm:block"/>
+                  매일의 식탁에 조용한 품격을 더합니다.
+                </p>
+                <div className="mt-9 flex flex-wrap gap-3">
+                  <Link to="/" aria-label="이번 주 컬렉션으로 이동">
+                    <Button size="lg">컬렉션 보기 <Icon.ArrowRight className="ml-2 w-4 h-4"/></Button>
+                  </Link>
+                  <Link to="/" aria-label="작가 이야기 보기">
+                    <Button size="lg" variant="secondary">작가 이야기</Button>
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* This week's selection */}
+          <section className="max-w-7xl mx-auto px-5 lg:px-10 py-20 lg:py-24">
+            <div className="flex items-end justify-between flex-wrap gap-4 mb-10 lg:mb-14">
+              <div>
+                <p className="font-serif-en text-sm text-brand-earth mb-3 tracking-wider">This week's selection</p>
+                <h2 className="text-3xl sm:text-4xl lg:text-5xl text-brand-accent leading-tight">이번 주의 그릇</h2>
+              </div>
+              <p className="text-sm text-brand-mute max-w-xs">
+                여섯 명의 작가가 정성껏 빚어낸<br/>이번 주 새로운 그릇들을 소개합니다.
+              </p>
+            </div>
+
+            {loading ? (
+              <ProductGridSkeleton />
+            ) : error ? (
+              <div className="py-16 text-center">
+                <p className="text-brand-mute mb-4">{error}</p>
+                <Button variant="secondary" size="sm" onClick={reload}>다시 시도</Button>
+              </div>
+            ) : products.length === 0 ? (
+              <p className="py-16 text-center text-brand-mute">등록된 그릇이 아직 없어요.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
+                {products.map(p => <ProductCard key={p.id} product={p} />)}
+              </div>
+            )}
+          </section>
+
+          {/* Brand story */}
+          <section className="bg-brand-bg border-t border-brand-line">
+            <div className="max-w-7xl mx-auto px-5 lg:px-10 py-20 lg:py-28 grid lg:grid-cols-2 gap-10 lg:gap-20 items-start">
+              <div>
+                <p className="font-serif-en text-sm text-brand-earth mb-4 tracking-wider">— Our Story</p>
+                <h2 className="text-3xl sm:text-4xl lg:text-5xl text-brand-accent leading-[1.25]">
+                  장인의 손에서<br/>식탁 위로
+                </h2>
+              </div>
+              <div className="space-y-5 text-base text-brand-ink/85 leading-[1.9]">
+                <p>
+                  달항아리는 한반도 곳곳의 작은 공방과 함께합니다.
+                  오랜 시간 흙을 만져온 도공의 손끝에서 그릇이 태어나고,
+                  그 그릇은 다시 누군가의 식탁에서 천천히 길들여집니다.
+                </p>
+                <p>
+                  우리는 빠르게 만들어진 물건이 줄 수 없는 결을 사랑합니다.
+                  미세하게 다른 색, 손으로 잡은 굽의 자국, 가마의 우연이 남긴 흔적.
+                  그 모든 것이 그릇 한 점의 표정이 됩니다.
+                </p>
+                <p>
+                  매일 쓰는 도구일수록 좋은 것을 가까이 두기를 권합니다.
+                  달항아리의 그릇이 당신의 평범한 식사에 가만한 즐거움이 되기를 바랍니다.
+                </p>
+              </div>
+            </div>
+          </section>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Product Detail
+    // ========================================
+    function ProductDetailPage({ id }) {
+      const { products, productsById, loading } = useProducts();
+      const product = productsById[id];
+      const { dispatch, wishlist, toggleWish } = useCart();
+      const { user, openLogin } = useAuth();
+      const { navigate } = useRouter();
+      const [qty, setQty] = useState(1);
+      const [openSpec, setOpenSpec] = useState(true);
+
+      if (loading) {
+        return (
+          <main className="max-w-7xl mx-auto px-5 lg:px-10 py-12">
+            <div className="grid lg:grid-cols-2 gap-10 lg:gap-16">
+              <div className="aspect-square bg-brand-line animate-pulse" />
+              <div className="space-y-4">
+                <div className="h-3 w-16 bg-brand-line animate-pulse" />
+                <div className="h-8 w-2/3 bg-brand-line animate-pulse" />
+                <div className="h-4 w-1/3 bg-brand-line animate-pulse" />
+                <div className="h-6 w-24 bg-brand-line animate-pulse mt-6" />
+              </div>
+            </div>
+          </main>
+        );
+      }
+
+      if (!product) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl mb-4">제품을 찾을 수 없습니다</h1>
+            <p className="text-brand-mute mb-8">요청하신 그릇이 컬렉션에서 사라졌어요.</p>
+            <Link to="/"><Button>홈으로 돌아가기</Button></Link>
+          </main>
+        );
+      }
+
+      const liked = wishlist.includes(product.id);
+      const related = products.filter(p => p.id !== product.id).slice(0, 3);
+
+      const handleAdd = () => {
+        if (!user) { openLogin(); return; }
+        dispatch({ type: 'ADD', id: product.id, qty });
+      };
+      const handleBuyNow = () => {
+        if (!user) { openLogin(); return; }
+        dispatch({ type: 'ADD', id: product.id, qty });
+        navigate('/cart');
+      };
+
+      return (
+        <main className="max-w-7xl mx-auto px-5 lg:px-10 py-8 lg:py-12">
+          {/* Breadcrumb */}
+          <nav aria-label="breadcrumb" className="text-xs text-brand-mute mb-8 flex items-center gap-2">
+            <Link to="/" className="hover:text-brand-ink inline-flex items-center gap-1"><Icon.ArrowLeft className="w-3 h-3"/> 홈</Link>
+            <span>/</span>
+            <span className="text-brand-ink/80">{product.category}</span>
+            <span>/</span>
+            <span className="text-brand-ink/80 truncate">{product.name}</span>
+          </nav>
+
+          <div className="grid lg:grid-cols-2 gap-10 lg:gap-16">
+            {/* 좌: 이미지 (sticky on desktop) */}
+            <div className="lg:sticky lg:top-24 self-start">
+              <div className="aspect-square bg-brand-line overflow-hidden">
+                <img src={product.image} alt={`${product.name} — ${product.artist}`} className="w-full h-full object-cover" />
+              </div>
+            </div>
+
+            {/* 우: 정보 */}
+            <div>
+              <p className="text-[11px] tracking-widest text-brand-mute uppercase mb-3">{product.category}</p>
+              <h1 className="text-3xl sm:text-4xl text-brand-accent leading-tight mb-3">{product.name}</h1>
+              <p className="text-sm text-brand-mute mb-6">{product.artist}</p>
+              <p className="text-2xl tabular-nums mb-8">{formatKRW(product.price)}</p>
+
+              <p className="text-base text-brand-ink/85 leading-[1.9] mb-10 pb-10 border-b border-brand-line">
+                {product.description}
+              </p>
+
+              {/* Specs (접이식) */}
+              <button
+                onClick={() => setOpenSpec(!openSpec)}
+                className="w-full flex items-center justify-between py-4 border-b border-brand-line text-sm tracking-wide"
+                aria-expanded={openSpec}
+              >
+                <span>제품 정보</span>
+                <span className="text-brand-mute">{openSpec ? '−' : '+'}</span>
+              </button>
+              {openSpec && (
+                <dl className="py-5 space-y-3 text-sm border-b border-brand-line">
+                  <div className="grid grid-cols-[80px_1fr] gap-4">
+                    <dt className="text-brand-mute">사이즈</dt><dd>{product.specs.size}</dd>
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr] gap-4">
+                    <dt className="text-brand-mute">소재</dt><dd>{product.specs.material}</dd>
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr] gap-4">
+                    <dt className="text-brand-mute">관리법</dt><dd>{product.specs.care}</dd>
+                  </div>
+                </dl>
+              )}
+
+              {/* 수량 + 액션 */}
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-5">
+                  <span className="text-sm text-brand-mute">수량</span>
+                  <QtyStepper value={qty} onChange={setQty} />
+                </div>
+                <div className="flex items-center justify-between mb-6 pb-6 border-b border-brand-line">
+                  <span className="text-sm">합계</span>
+                  <span className="text-xl tabular-nums">{formatKRW(product.price * qty)}</span>
+                </div>
+
+                <div className="grid grid-cols-[auto_1fr_1fr] gap-3">
+                  <button
+                    onClick={() => toggleWish(product.id)}
+                    aria-label={liked ? '찜 해제' : '찜하기'}
+                    className={`w-12 h-12 flex items-center justify-center border border-brand-line hover:border-brand-ink ${liked ? 'text-red-700 border-red-300' : 'text-brand-ink'}`}
+                  >
+                    <Icon.Heart filled={liked} />
+                  </button>
+                  <Button variant="secondary" size="lg" onClick={handleAdd}>장바구니 담기</Button>
+                  <Button size="lg" onClick={handleBuyNow}>바로 구매</Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Related */}
+          <section className="mt-24 lg:mt-32">
+            <div className="mb-8 flex items-end justify-between flex-wrap gap-3">
+              <div>
+                <p className="font-serif-en text-sm text-brand-earth mb-2 tracking-wider">You may also like</p>
+                <h2 className="text-2xl sm:text-3xl text-brand-accent">함께 보면 좋은 그릇</h2>
+              </div>
+            </div>
+            {/* 모바일: 가로 스크롤 / 데스크톱: 그리드 */}
+            <div className="hidden md:grid grid-cols-3 gap-6 lg:gap-8">
+              {related.map(p => <ProductCard key={p.id} product={p} />)}
+            </div>
+            <div className="md:hidden -mx-5 px-5 flex gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
+              {related.map(p => (
+                <div key={p.id} className="min-w-[78%] snap-start">
+                  <ProductCard product={p} />
+                </div>
+              ))}
+            </div>
+          </section>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Cart
+    // ========================================
+    function CartPage() {
+      const { cart, dispatch } = useCart();
+      const { productsById } = useProducts();
+      const { user, openLogin } = useAuth();
+      const { navigate } = useRouter();
+
+      if (!user) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">로그인이 필요합니다</h1>
+            <p className="text-brand-mute mb-8">장바구니는 로그인 후 이용하실 수 있습니다.</p>
+            <Button onClick={openLogin}>로그인하기</Button>
+          </main>
+        );
+      }
+
+      const items = cart.map(it => ({ ...it, product: productsById[it.id] })).filter(it => it.product);
+      const subtotal = items.reduce((s, it) => s + it.product.price * it.qty, 0);
+      const shipping = items.length === 0 ? 0 : (subtotal >= 50000 ? 0 : 3000);
+      const total = subtotal + shipping;
+
+      const handleCheckout = () => {
+        navigate('/checkout');
+      };
+
+      // 빈 장바구니
+      if (items.length === 0) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 lg:px-10 py-20 lg:py-28 text-center">
+            <div className="flex justify-center text-brand-mute mb-6">
+              <Icon.EmptyBag className="w-20 h-20" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl text-brand-accent mb-3">장바구니가 비어 있어요</h1>
+            <p className="text-brand-mute mb-10 leading-relaxed">
+              마음에 드는 그릇을 천천히 골라 담아 보세요.<br/>
+              작은 공방의 정성이 식탁까지 닿도록.
+            </p>
+            <Link to="/"><Button size="lg">쇼핑 계속하기 <Icon.ArrowRight className="ml-2 w-4 h-4"/></Button></Link>
+          </main>
+        );
+      }
+
+      return (
+        <main className="max-w-7xl mx-auto px-5 lg:px-10 py-10 lg:py-14">
+          <h1 className="text-3xl sm:text-4xl text-brand-accent mb-2">장바구니</h1>
+          <p className="text-sm text-brand-mute mb-10">{items.length}개의 그릇이 담겨 있습니다.</p>
+
+          <div className="grid lg:grid-cols-[1fr_360px] gap-8 lg:gap-12 items-start">
+            {/* 라인 아이템 */}
+            <ul className="border-t border-brand-line">
+              {items.map(({ product, qty }) => (
+                <li key={product.id} className="py-6 border-b border-brand-line flex gap-4 sm:gap-6">
+                  <Link to={`/product/${product.id}`} className="block w-24 h-24 sm:w-32 sm:h-32 bg-brand-line overflow-hidden flex-shrink-0">
+                    <img src={product.image} alt={product.name} className="w-full h-full object-cover hover:scale-105" />
+                  </Link>
+                  <div className="flex-1 min-w-0 flex flex-col justify-between">
+                    <div>
+                      <p className="text-[11px] tracking-widest text-brand-mute uppercase mb-1">{product.category}</p>
+                      <Link to={`/product/${product.id}`} className="text-base sm:text-lg text-brand-ink hover:text-brand-earth">
+                        {product.name}
+                      </Link>
+                      <p className="text-xs text-brand-mute mt-1">{product.artist}</p>
+                    </div>
+                    <div className="flex items-end justify-between gap-3 flex-wrap mt-3">
+                      <QtyStepper value={qty} onChange={(v) => dispatch({ type: 'SET_QTY', id: product.id, qty: v })} />
+                      <div className="text-right">
+                        <p className="text-base tabular-nums">{formatKRW(product.price * qty)}</p>
+                        <button
+                          onClick={() => dispatch({ type: 'REMOVE', id: product.id })}
+                          className="text-xs text-brand-mute hover:text-brand-ink mt-2 inline-flex items-center gap-1"
+                          aria-label={`${product.name} 삭제`}
+                        >
+                          <Icon.Trash className="w-3.5 h-3.5"/> 삭제
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {/* 주문 요약 */}
+            <aside className="lg:sticky lg:top-24">
+              <Card className="p-6">
+                <h2 className="text-lg mb-5 pb-4 border-b border-brand-line">주문 요약</h2>
+                <dl className="space-y-3 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-brand-mute">소계</dt>
+                    <dd className="tabular-nums">{formatKRW(subtotal)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-brand-mute">배송비</dt>
+                    <dd className="tabular-nums">{shipping === 0 ? '무료' : formatKRW(shipping)}</dd>
+                  </div>
+                  {shipping > 0 && (
+                    <p className="text-xs text-brand-earth pt-1">
+                      {formatKRW(50000 - subtotal)} 더 담으면 무료 배송
+                    </p>
+                  )}
+                </dl>
+                <div className="mt-5 pt-5 border-t border-brand-line flex items-baseline justify-between">
+                  <span className="text-sm">합계</span>
+                  <span className="text-2xl tabular-nums">{formatKRW(total)}</span>
+                </div>
+                <Button size="lg" className="w-full mt-6" onClick={handleCheckout}>결제하기</Button>
+                <Link to="/" className="block text-center text-xs text-brand-mute hover:text-brand-ink mt-4">
+                  ← 쇼핑 계속하기
+                </Link>
+              </Card>
+              <p className="text-[11px] text-brand-mute leading-relaxed mt-4 px-1">
+                · 5만원 이상 구매 시 배송비 무료<br/>
+                · 모든 그릇은 안전하게 포장되어 발송됩니다.
+              </p>
+            </aside>
+          </div>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Checkout (TossPayments 결제위젯)
+    // ========================================
+    function CheckoutPage() {
+      const { cart } = useCart();
+      const { productsById } = useProducts();
+      const { user, openLogin } = useAuth();
+      const { navigate } = useRouter();
+
+      const items = cart.map(it => ({ ...it, product: productsById[it.id] })).filter(it => it.product);
+      const subtotal = items.reduce((s, it) => s + it.product.price * it.qty, 0);
+      const shipping = items.length === 0 ? 0 : (subtotal >= 50000 ? 0 : 3000);
+      const total = subtotal + shipping;
+
+      const widgetsRef = useRef(null);
+      const renderedRef = useRef(false);
+      const orderNameRef = useRef('');
+
+      const [ready, setReady] = useState(false);
+      const [paying, setPaying] = useState(false);
+      const [error, setError] = useState(null);
+
+      // 배송지 — 로그인 사용자 정보로 일부 디폴트
+      const [ship, setShip] = useState(() => ({
+        recipient: user?.name || '',
+        phone: '',
+        postcode: '',
+        address1: '',
+        address2: '',
+        memo: '',
+      }));
+
+      if (orderNameRef.current === '' && items.length > 0) {
+        const head = items[0].product.name;
+        orderNameRef.current = items.length === 1 ? head : `${head} 외 ${items.length - 1}건`;
+      }
+
+      // 위젯 초기화 — 한 번만
+      useEffect(() => {
+        if (items.length === 0) return;
+        if (typeof window.TossPayments !== 'function') {
+          setError('결제 SDK 로드에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+          return;
+        }
+        let cancelled = false;
+        (async () => {
+          try {
+            const tossPayments = window.TossPayments(TOSS_CLIENT_KEY);
+            // 비회원 결제는 리터럴 "ANONYMOUS", 로그인 사용자는 user.id 기반.
+            // customerKey는 영문/숫자/-_=.@ 만 허용, 2~50자.
+            const rawId = user && user.id != null ? String(user.id) : '';
+            const safeId = rawId.replace(/[^A-Za-z0-9\-_=.@]/g, '-');
+            const customerKey = safeId
+              ? `dalhangari-user-${safeId}`.slice(0, 50)
+              : 'ANONYMOUS';
+            const widgets = tossPayments.widgets({ customerKey });
+
+            // setAmount 먼저 → 그 다음 render
+            await widgets.setAmount({ currency: 'KRW', value: total });
+
+            if (cancelled) return;
+
+            if (!renderedRef.current) {
+              await widgets.renderPaymentMethods({
+                selector: '#toss-payment-methods',
+                variantKey: 'DEFAULT',
+              });
+              await widgets.renderAgreement({
+                selector: '#toss-agreement',
+                variantKey: 'AGREEMENT',
+              });
+              renderedRef.current = true;
+            }
+
+            widgetsRef.current = widgets;
+            if (!cancelled) setReady(true);
+          } catch (e) {
+            console.error('[Toss widgets init]', e);
+            if (!cancelled) setError(e?.message || '결제 위젯 초기화 실패');
+          }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []); // 한 번만
+
+      // 합계가 바뀌면 setAmount만 호출 (재렌더 금지)
+      useEffect(() => {
+        if (!widgetsRef.current) return;
+        widgetsRef.current.setAmount({ currency: 'KRW', value: total }).catch((e) => {
+          console.error('[Toss setAmount]', e);
+        });
+      }, [total]);
+
+      const handlePay = async () => {
+        if (!widgetsRef.current || !ready || paying) return;
+        if (!user) { openLogin(); return; }
+
+        // 배송지 검증
+        const required = ['recipient','phone','postcode','address1'];
+        for (const k of required) {
+          if (!String(ship[k] || '').trim()) {
+            setError('배송지 정보를 모두 입력해주세요.');
+            return;
+          }
+        }
+
+        setPaying(true);
+        setError(null);
+        try {
+          // 1) 서버에 주문 생성 — orderNumber/total은 서버가 결정 (위변조 방지)
+          const order = await apiFetch('/orders', {
+            method: 'POST',
+            auth: true,
+            body: {
+              items: items.map(it => ({ id: it.product.id, qty: it.qty })),
+              shipping: ship,
+            },
+          });
+
+          // 클라/서버 합계 차이를 흡수
+          if (order.total !== total) {
+            await widgetsRef.current.setAmount({ currency: 'KRW', value: order.total });
+          }
+
+          const origin = window.location.origin;
+          await widgetsRef.current.requestPayment({
+            orderId: order.orderNumber,
+            orderName: orderNameRef.current || '주문',
+            successUrl: `${origin}/#/payment/success`,
+            failUrl:    `${origin}/#/payment/fail`,
+            customerEmail: user.email || undefined,
+            customerName:  user.name  || undefined,
+          });
+          // 위 호출은 redirect로 이어지므로 이 줄은 거의 도달하지 않음
+        } catch (e) {
+          console.error('[checkout]', e);
+          if (e?.code === 'USER_CANCEL') {
+            setError('결제를 취소하셨습니다.');
+          } else {
+            setError(e?.message || '결제 요청에 실패했습니다.');
+          }
+          setPaying(false);
+        }
+      };
+
+      // 비로그인 가드
+      if (!user) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">로그인이 필요합니다</h1>
+            <p className="text-brand-mute mb-8">결제는 로그인 후 진행하실 수 있습니다.</p>
+            <Button onClick={openLogin}>로그인하기</Button>
+          </main>
+        );
+      }
+
+      // 빈 장바구니 가드
+      if (items.length === 0) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 lg:px-10 py-20 lg:py-28 text-center">
+            <div className="flex justify-center text-brand-mute mb-6">
+              <Icon.EmptyBag className="w-20 h-20" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl text-brand-accent mb-3">결제할 상품이 없습니다</h1>
+            <p className="text-brand-mute mb-10 leading-relaxed">
+              장바구니에 그릇을 담아주세요.
+            </p>
+            <Link to="/"><Button size="lg">쇼핑 계속하기 <Icon.ArrowRight className="ml-2 w-4 h-4"/></Button></Link>
+          </main>
+        );
+      }
+
+      return (
+        <main className="max-w-7xl mx-auto px-5 lg:px-10 py-10 lg:py-14">
+          <h1 className="text-3xl sm:text-4xl text-brand-accent mb-2">결제</h1>
+          <p className="text-sm text-brand-mute mb-10">결제 수단을 선택해주세요.</p>
+
+          <div className="grid lg:grid-cols-[1fr_360px] gap-8 lg:gap-12 items-start">
+            {/* 좌: 결제 위젯 */}
+            <div>
+              {/* 배송지 */}
+              <Card className="p-6 mb-6">
+                <h2 className="text-lg mb-5 pb-4 border-b border-brand-line">배송지</h2>
+                <div className="grid sm:grid-cols-2 gap-4 text-sm">
+                  <label className="block">
+                    <span className="text-brand-mute">받는 분 *</span>
+                    <input type="text" value={ship.recipient} onChange={e => setShip({...ship, recipient: e.target.value})}
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                  <label className="block">
+                    <span className="text-brand-mute">연락처 *</span>
+                    <input type="tel" value={ship.phone} onChange={e => setShip({...ship, phone: e.target.value})}
+                      placeholder="010-1234-5678"
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                  <label className="block">
+                    <span className="text-brand-mute">우편번호 *</span>
+                    <input type="text" value={ship.postcode} onChange={e => setShip({...ship, postcode: e.target.value})}
+                      placeholder="06236"
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-brand-mute">주소 *</span>
+                    <input type="text" value={ship.address1} onChange={e => setShip({...ship, address1: e.target.value})}
+                      placeholder="서울 강남구 테헤란로 …"
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-brand-mute">상세 주소</span>
+                    <input type="text" value={ship.address2} onChange={e => setShip({...ship, address2: e.target.value})}
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-brand-mute">배송 메모</span>
+                    <input type="text" value={ship.memo} onChange={e => setShip({...ship, memo: e.target.value})}
+                      placeholder="문 앞에 두고 노크해주세요"
+                      className="mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink" />
+                  </label>
+                </div>
+              </Card>
+
+              {/* 주문 상품 요약 */}
+              <Card className="p-6 mb-6">
+                <h2 className="text-lg mb-5 pb-4 border-b border-brand-line">주문 상품</h2>
+                <ul className="divide-y divide-brand-line">
+                  {items.map(({ product, qty }) => (
+                    <li key={product.id} className="py-3 flex justify-between gap-4 text-sm">
+                      <div className="min-w-0">
+                        <p className="text-brand-ink truncate">{product.name}</p>
+                        <p className="text-xs text-brand-mute mt-0.5">{product.artist} · 수량 {qty}</p>
+                      </div>
+                      <span className="tabular-nums text-brand-ink whitespace-nowrap">
+                        {formatKRW(product.price * qty)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+
+              {/* TossPayments 결제수단 */}
+              <Card className="p-2 sm:p-4 mb-4">
+                <div id="toss-payment-methods" />
+              </Card>
+              {/* TossPayments 약관 */}
+              <Card className="p-2 sm:p-4">
+                <div id="toss-agreement" />
+              </Card>
+
+              {error && (
+                <p className="mt-4 text-sm text-red-700 bg-red-50 border border-red-200 px-4 py-3 rounded">
+                  {error}
+                </p>
+              )}
+            </div>
+
+            {/* 우: 합계 + 결제 버튼 */}
+            <aside className="lg:sticky lg:top-24">
+              <Card className="p-6">
+                <h2 className="text-lg mb-5 pb-4 border-b border-brand-line">결제 금액</h2>
+                <dl className="space-y-3 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-brand-mute">소계</dt>
+                    <dd className="tabular-nums">{formatKRW(subtotal)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-brand-mute">배송비</dt>
+                    <dd className="tabular-nums">{shipping === 0 ? '무료' : formatKRW(shipping)}</dd>
+                  </div>
+                </dl>
+                <div className="mt-5 pt-5 border-t border-brand-line flex items-baseline justify-between">
+                  <span className="text-sm">총 결제 금액</span>
+                  <span className="text-2xl tabular-nums">{formatKRW(total)}</span>
+                </div>
+                <Button
+                  size="lg"
+                  className="w-full mt-6"
+                  onClick={handlePay}
+                  disabled={!ready || paying}
+                >
+                  {paying ? '결제 진행 중…' : ready ? `${formatKRW(total)} 결제하기` : '결제 위젯 불러오는 중…'}
+                </Button>
+                <Link to="/cart" className="block text-center text-xs text-brand-mute hover:text-brand-ink mt-4">
+                  ← 장바구니로 돌아가기
+                </Link>
+              </Card>
+              <p className="text-[11px] text-brand-mute leading-relaxed mt-4 px-1">
+                · 테스트 환경입니다. 실제 결제는 일어나지 않습니다.<br/>
+                · 테스트 카드 번호 예: 4330-1234-1234-1234<br/>
+                · 만료일/CVC/비밀번호는 임의의 값으로 입력 가능합니다.
+              </p>
+            </aside>
+          </div>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Payment Success
+    // ========================================
+    function PaymentSuccessPage() {
+      const { dispatch } = useCart();
+      const [state, setState] = useState({ status: 'loading', data: null, error: null });
+      const ranRef = useRef(false);
+
+      useEffect(() => {
+        if (ranRef.current) return;
+        ranRef.current = true;
+
+        const q = parseHashQuery();
+        const paymentKey = q.get('paymentKey');
+        const orderId    = q.get('orderId');
+        const amountStr  = q.get('amount');
+
+        if (!paymentKey || !orderId || !amountStr) {
+          setState({ status: 'error', data: null, error: '결제 정보가 올바르지 않습니다.' });
+          return;
+        }
+        const amount = Number(amountStr);
+
+        (async () => {
+          try {
+            const data = await apiFetch('/payments/confirm', {
+              method: 'POST',
+              body: { paymentKey, orderId, amount },
+            });
+            // 결제 성공: 장바구니 비우기
+            dispatch({ type: 'CLEAR' });
+            // 성공 후 URL 정리 (재confirm 방지 + 민감 파라미터 노출 최소화)
+            try {
+              const cleanUrl = window.location.pathname + '#/payment/success';
+              window.history.replaceState({}, '', cleanUrl);
+            } catch (_) {}
+            setState({ status: 'ok', data, error: null });
+          } catch (e) {
+            setState({ status: 'error', data: null, error: e?.message || '결제 승인 실패' });
+          }
+        })();
+      }, [dispatch]);
+
+      if (state.status === 'loading') {
+        return (
+          <main className="max-w-2xl mx-auto px-5 py-24 text-center">
+            <div className="inline-block w-10 h-10 border-2 border-brand-line border-t-brand-ink rounded-full animate-spin mb-6" />
+            <h1 className="text-2xl text-brand-accent mb-2">결제를 확인하고 있어요</h1>
+            <p className="text-brand-mute text-sm">잠시만 기다려주세요…</p>
+          </main>
+        );
+      }
+
+      if (state.status === 'error') {
+        return (
+          <main className="max-w-2xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">결제 확인에 실패했습니다</h1>
+            <p className="text-brand-mute mb-8 leading-relaxed">{state.error}</p>
+            <div className="flex gap-3 justify-center">
+              <Link to="/cart"><Button variant="secondary">장바구니로</Button></Link>
+              <Link to="/"><Button>홈으로</Button></Link>
+            </div>
+          </main>
+        );
+      }
+
+      const d = state.data || {};
+      return (
+        <main className="max-w-2xl mx-auto px-5 py-20 lg:py-24 text-center">
+          <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-brand-earth/10 flex items-center justify-center">
+            <svg viewBox="0 0 24 24" className="w-8 h-8 text-brand-earth" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
+          <h1 className="text-3xl text-brand-accent mb-3">결제가 완료되었습니다</h1>
+          <p className="text-brand-mute mb-10 leading-relaxed">
+            소중한 그릇이 정성껏 포장되어 곧 출발합니다.
+          </p>
+
+          <Card className="p-6 text-left mb-8">
+            <dl className="space-y-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-brand-mute">주문번호</dt>
+                <dd className="tabular-nums truncate" title={d.orderId}>{d.orderId}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-brand-mute">주문명</dt>
+                <dd className="truncate">{d.orderName}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-brand-mute">결제 수단</dt>
+                <dd>{d.method || '-'}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-brand-mute">결제 금액</dt>
+                <dd className="tabular-nums">{formatKRW(d.totalAmount || 0)}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-brand-mute">상태</dt>
+                <dd>{d.status || '-'}</dd>
+              </div>
+            </dl>
+            {d.receipt && d.receipt.url && (
+              <a href={d.receipt.url} target="_blank" rel="noopener noreferrer"
+                 className="block text-center text-xs text-brand-earth hover:text-brand-ink mt-5 underline underline-offset-4">
+                영수증 보기 →
+              </a>
+            )}
+          </Card>
+
+          <Link to="/"><Button size="lg">쇼핑 계속하기 <Icon.ArrowRight className="ml-2 w-4 h-4"/></Button></Link>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Payment Fail
+    // ========================================
+    function PaymentFailPage() {
+      const [info, setInfo] = useState({ code: null, message: null, orderId: null });
+
+      useEffect(() => {
+        const q = parseHashQuery();
+        setInfo({
+          code: q.get('code'),
+          message: q.get('message'),
+          orderId: q.get('orderId'),
+        });
+        try {
+          const cleanUrl = window.location.pathname + '#/payment/fail';
+          window.history.replaceState({}, '', cleanUrl);
+        } catch (_) {}
+      }, []);
+
+      return (
+        <main className="max-w-2xl mx-auto px-5 py-20 lg:py-24 text-center">
+          <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-red-50 flex items-center justify-center">
+            <svg viewBox="0 0 24 24" className="w-8 h-8 text-red-700" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </div>
+          <h1 className="text-3xl text-brand-accent mb-3">결제에 실패했습니다</h1>
+          <p className="text-brand-mute mb-8 leading-relaxed">
+            {info.message || '결제가 정상적으로 처리되지 않았어요.'}
+          </p>
+          {(info.code || info.orderId) && (
+            <Card className="p-6 text-left mb-8">
+              <dl className="space-y-3 text-sm">
+                {info.code && (
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-brand-mute">에러 코드</dt>
+                    <dd className="font-mono">{info.code}</dd>
+                  </div>
+                )}
+                {info.orderId && (
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-brand-mute">주문번호</dt>
+                    <dd className="tabular-nums truncate" title={info.orderId}>{info.orderId}</dd>
+                  </div>
+                )}
+              </dl>
+            </Card>
+          )}
+          <div className="flex gap-3 justify-center">
+            <Link to="/cart"><Button variant="secondary">장바구니로</Button></Link>
+            <Link to="/checkout"><Button>다시 결제하기</Button></Link>
+          </div>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — MyPage (주문 내역)
+    // ========================================
+    const ORDER_STATUS_LABEL = {
+      pending:   { ko: '결제 대기', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+      paid:      { ko: '결제 완료', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+      preparing: { ko: '상품 준비중', cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+      shipping:  { ko: '배송중',     cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+      delivered: { ko: '배송 완료', cls: 'bg-stone-50 text-stone-700 border-stone-200' },
+      cancelled: { ko: '취소',       cls: 'bg-red-50 text-red-700 border-red-200' },
+      refunded:  { ko: '환불',       cls: 'bg-red-50 text-red-700 border-red-200' },
+    };
+
+    function MyPage() {
+      const { user, openLogin } = useAuth();
+      const [state, setState] = useState({ status: 'loading', orders: [], error: null });
+      const [deletingId, setDeletingId] = useState(null);
+
+      const handleDelete = async (orderId) => {
+        if (!window.confirm('결제 대기 중인 주문을 삭제하시겠습니까?')) return;
+        setDeletingId(orderId);
+        try {
+          await apiFetch(`/me/orders/${orderId}`, { method: 'DELETE', auth: true });
+          setState(s => ({ ...s, orders: s.orders.filter(o => o.id !== orderId) }));
+        } catch (e) {
+          alert(e?.message || '삭제 실패');
+        } finally {
+          setDeletingId(null);
+        }
+      };
+
+      useEffect(() => {
+        if (!user) { setState({ status: 'guest', orders: [], error: null }); return; }
+        let cancelled = false;
+        (async () => {
+          try {
+            const data = await apiFetch('/me/orders', { auth: true });
+            if (!cancelled) setState({ status: 'ok', orders: data, error: null });
+          } catch (e) {
+            if (!cancelled) setState({ status: 'error', orders: [], error: e?.message || '불러오기 실패' });
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [user]);
+
+      if (state.status === 'guest') {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">로그인이 필요합니다</h1>
+            <p className="text-brand-mute mb-8">주문 내역은 로그인 후 확인하실 수 있습니다.</p>
+            <Button onClick={openLogin}>로그인하기</Button>
+          </main>
+        );
+      }
+      if (state.status === 'loading') {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <div className="inline-block w-10 h-10 border-2 border-brand-line border-t-brand-ink rounded-full animate-spin mb-6" />
+            <p className="text-brand-mute text-sm">주문 내역을 불러오는 중…</p>
+          </main>
+        );
+      }
+      if (state.status === 'error') {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">주문 내역을 불러오지 못했어요</h1>
+            <p className="text-brand-mute mb-8">{state.error}</p>
+          </main>
+        );
+      }
+
+      const orders = state.orders || [];
+      return (
+        <main className="max-w-5xl mx-auto px-5 lg:px-10 py-10 lg:py-14">
+          <h1 className="text-3xl sm:text-4xl text-brand-accent mb-2">마이페이지</h1>
+          <p className="text-sm text-brand-mute mb-10">{user.name || user.email}님의 주문 내역입니다.</p>
+
+          {orders.length === 0 ? (
+            <Card className="p-12 text-center">
+              <p className="text-brand-mute mb-6">아직 주문 내역이 없습니다.</p>
+              <Link to="/"><Button>쇼핑하러 가기</Button></Link>
+            </Card>
+          ) : (
+            <div className="space-y-6">
+              {orders.map(o => {
+                const st = ORDER_STATUS_LABEL[o.status] || { ko: o.status, cls: 'bg-stone-50 text-stone-700 border-stone-200' };
+                const date = new Date(o.createdAt);
+                const dateStr = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}.${String(date.getDate()).padStart(2,'0')}`;
+                return (
+                  <Card key={o.id} className="p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-brand-line">
+                      <div>
+                        <p className="text-xs text-brand-mute">{dateStr}</p>
+                        <p className="text-sm tabular-nums text-brand-ink mt-0.5">{o.orderNumber}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2.5 py-1 border rounded-full ${st.cls}`}>{st.ko}</span>
+                        {o.status === 'pending' && (
+                          <button
+                            onClick={() => handleDelete(o.id)}
+                            disabled={deletingId === o.id}
+                            className="text-xs px-2.5 py-1 border border-red-200 text-red-700 hover:bg-red-50 rounded-full disabled:opacity-50"
+                          >
+                            {deletingId === o.id ? '삭제 중…' : '삭제'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <ul className="space-y-3 mb-5">
+                      {o.items.map((it, idx) => (
+                        <li key={idx} className="flex gap-4 items-center">
+                          {it.image && (
+                            <img src={it.image} alt={it.name}
+                              className="w-16 h-16 object-cover bg-brand-line/30 flex-shrink-0" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-brand-ink truncate">{it.name}</p>
+                            <p className="text-xs text-brand-mute mt-0.5 truncate">{it.artist} · 수량 {it.qty}</p>
+                          </div>
+                          <span className="text-sm tabular-nums whitespace-nowrap">{formatKRW(it.line_total)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-brand-line text-sm">
+                      <div className="text-brand-mute">
+                        받는 분: <span className="text-brand-ink">{o.recipient}</span> · {o.address}
+                      </div>
+                      <div>
+                        <span className="text-brand-mute mr-2">결제 금액</span>
+                        <span className="text-lg tabular-nums">{formatKRW(o.total)}</span>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      );
+    }
+
+    // ========================================
+    // 📄  Page — Admin (상품 등록)
+    // ========================================
+    const IMAGEKIT_UPLOAD_URL = 'https://upload.imagekit.io/api/v1/files/upload';
+
+    async function uploadToImageKit(file) {
+      const auth = await apiFetch('/imagekit-auth', { auth: true });
+      const form = new FormData();
+      form.append('file', file);
+      form.append('fileName', file.name);
+      form.append('publicKey', auth.publicKey);
+      form.append('token', auth.token);
+      form.append('expire', String(auth.expire));
+      form.append('signature', auth.signature);
+      form.append('useUniqueFileName', 'true');
+      const res = await fetch(IMAGEKIT_UPLOAD_URL, { method: 'POST', body: form });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.message || `업로드 실패 (HTTP ${res.status})`);
+      return json; // { url, fileId, ... }
+    }
+
+    function AdminPage() {
+      const { user, openLogin } = useAuth();
+      const { reload: reloadProducts } = useProducts();
+      const [refdata, setRefdata] = useState({ artists: [], categories: [] });
+      const [refLoading, setRefLoading] = useState(true);
+
+      const [form, setForm] = useState({
+        id: '',
+        name: '',
+        description: '',
+        price: '',
+        stock: '',
+        artist_id: '',
+        artist_name: '',
+        artist_region: '',
+        category_id: '',
+        category_name: '',
+        size: '',
+        material: '',
+        care: '',
+      });
+      const [file, setFile] = useState(null);
+      const [preview, setPreview] = useState(null);
+      const [uploadedUrl, setUploadedUrl] = useState('');
+      const [uploading, setUploading] = useState(false);
+      const [submitting, setSubmitting] = useState(false);
+      const [msg, setMsg] = useState(null);
+
+      useEffect(() => {
+        if (!user || !user.isAdmin) return;
+        Promise.all([apiFetch('/categories'), apiFetch('/artists')])
+          .then(([categories, artists]) => setRefdata({ artists, categories }))
+          .catch(() => setMsg({ type: 'error', text: '작가/카테고리 정보를 불러오지 못했습니다.' }))
+          .finally(() => setRefLoading(false));
+      }, [user]);
+
+      const onPickFile = (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        if (!f.type.startsWith('image/')) { setMsg({ type: 'error', text: '이미지 파일만 업로드 가능합니다.' }); return; }
+        if (f.size > 10 * 1024 * 1024)    { setMsg({ type: 'error', text: '이미지는 10MB 이하만 가능합니다.' }); return; }
+        setFile(f);
+        setUploadedUrl('');
+        setMsg(null);
+        const reader = new FileReader();
+        reader.onload = ev => setPreview(ev.target.result);
+        reader.readAsDataURL(f);
+      };
+
+      const handleUpload = async () => {
+        if (!file || uploading) return;
+        setUploading(true);
+        setMsg(null);
+        try {
+          const result = await uploadToImageKit(file);
+          setUploadedUrl(result.url);
+          setMsg({ type: 'success', text: '이미지 업로드 완료' });
+        } catch (e) {
+          setMsg({ type: 'error', text: e?.message || '업로드 실패' });
+        } finally {
+          setUploading(false);
+        }
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (submitting) return;
+        if (!uploadedUrl) { setMsg({ type: 'error', text: '먼저 이미지를 업로드해주세요.' }); return; }
+
+        const specs = {};
+        if (form.size.trim())     specs.size = form.size.trim();
+        if (form.material.trim()) specs.material = form.material.trim();
+        if (form.care.trim())     specs.care = form.care.trim();
+
+        // 작가: '__new__' 면 직접 입력, 아니면 기존 id
+        const artistPayload = form.artist_id === '__new__'
+          ? { artist_name: form.artist_name.trim(),
+              artist_region: form.artist_region.trim() || undefined }
+          : { artist_id: Number(form.artist_id) };
+
+        const categoryPayload = form.category_id === '__new__'
+          ? { category_name: form.category_name.trim() }
+          : { category_id: Number(form.category_id) };
+
+        if (form.artist_id === '__new__' && !artistPayload.artist_name) {
+          setMsg({ type: 'error', text: '작가명을 입력해주세요.' });
+          return;
+        }
+        if (form.category_id === '__new__' && !categoryPayload.category_name) {
+          setMsg({ type: 'error', text: '카테고리명을 입력해주세요.' });
+          return;
+        }
+
+        setSubmitting(true);
+        setMsg(null);
+        try {
+          await apiFetch('/admin/products', {
+            method: 'POST',
+            auth: true,
+            body: {
+              id: form.id.trim().toLowerCase(),
+              name: form.name.trim(),
+              description: form.description.trim(),
+              price: Number(form.price),
+              stock: Number(form.stock),
+              ...artistPayload,
+              ...categoryPayload,
+              thumbnail_url: uploadedUrl,
+              specs,
+            },
+          });
+          setMsg({ type: 'success', text: `상품이 등록되었습니다: ${form.name}` });
+          setForm({ id: '', name: '', description: '', price: '', stock: '',
+                    artist_id: '', artist_name: '', artist_region: '',
+                    category_id: '', category_name: '',
+                    size: '', material: '', care: '' });
+          // 새 작가/카테고리는 다음 등록에서도 select에 보이도록 refdata 갱신
+          Promise.all([apiFetch('/categories'), apiFetch('/artists')])
+            .then(([categories, artists]) => setRefdata({ artists, categories }))
+            .catch(() => {});
+          setFile(null); setPreview(null); setUploadedUrl('');
+          // 홈/리스트 페이지 즉시 반영 — 새로고침 없이 보이도록
+          reloadProducts();
+        } catch (err) {
+          setMsg({ type: 'error', text: err?.message || '등록 실패' });
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      if (!user) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">로그인이 필요합니다</h1>
+            <Button onClick={openLogin}>로그인하기</Button>
+          </main>
+        );
+      }
+      if (!user.isAdmin) {
+        return (
+          <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+            <h1 className="text-2xl text-brand-accent mb-3">관리자 권한이 필요합니다</h1>
+            <p className="text-brand-mute">이 페이지는 관리자만 접근할 수 있습니다.</p>
+          </main>
+        );
+      }
+
+      const inputCls = "mt-1 block w-full border border-brand-line px-3 py-2 focus:outline-none focus:border-brand-ink";
+
+      return (
+        <main className="max-w-3xl mx-auto px-5 lg:px-10 py-10 lg:py-14">
+          <h1 className="text-3xl sm:text-4xl text-brand-accent mb-2">상품 등록</h1>
+          <p className="text-sm text-brand-mute mb-10">관리자 전용 페이지입니다. 이미지는 ImageKit에 업로드됩니다.</p>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* 이미지 업로드 */}
+            <Card className="p-6">
+              <h2 className="text-lg mb-4">대표 이미지</h2>
+              <div className="flex items-start gap-5">
+                <div className="w-32 h-32 bg-brand-line/30 border border-brand-line flex items-center justify-center overflow-hidden">
+                  {preview ? (
+                    <img src={uploadedUrl || preview} alt="미리보기" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-xs text-brand-mute">미리보기</span>
+                  )}
+                </div>
+                <div className="flex-1 space-y-3">
+                  <input type="file" accept="image/*" onChange={onPickFile} className="block text-sm" />
+                  {file && (
+                    <p className="text-xs text-brand-mute">{file.name} · {(file.size / 1024).toFixed(1)} KB</p>
+                  )}
+                  <div className="flex gap-2">
+                    <Button type="button" onClick={handleUpload} disabled={!file || uploading || !!uploadedUrl}>
+                      {uploading ? '업로드 중…' : uploadedUrl ? '업로드 완료' : 'ImageKit 업로드'}
+                    </Button>
+                  </div>
+                  {uploadedUrl && (
+                    <p className="text-xs text-brand-earth break-all">URL: {uploadedUrl}</p>
+                  )}
+                </div>
+              </div>
+            </Card>
+
+            {/* 기본 정보 */}
+            <Card className="p-6 space-y-4">
+              <h2 className="text-lg mb-2">기본 정보</h2>
+              <div className="grid sm:grid-cols-2 gap-4 text-sm">
+                <label className="block">
+                  <span className="text-brand-mute">상품 ID (slug) *</span>
+                  <input type="text" required value={form.id} onChange={e => setForm({...form, id: e.target.value})}
+                    placeholder="product-7" className={inputCls} />
+                </label>
+                <label className="block">
+                  <span className="text-brand-mute">상품명 *</span>
+                  <input type="text" required value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+                    placeholder="백자 다완" className={inputCls} />
+                </label>
+                <label className="block">
+                  <span className="text-brand-mute">가격 (원) *</span>
+                  <input type="number" required min="0" value={form.price} onChange={e => setForm({...form, price: e.target.value})}
+                    placeholder="38000" className={inputCls} />
+                </label>
+                <label className="block">
+                  <span className="text-brand-mute">재고 *</span>
+                  <input type="number" required min="0" value={form.stock} onChange={e => setForm({...form, stock: e.target.value})}
+                    placeholder="10" className={inputCls} />
+                </label>
+                <div className="block">
+                  <label className="block">
+                    <span className="text-brand-mute">작가 *</span>
+                    <select required value={form.artist_id} onChange={e => setForm({...form, artist_id: e.target.value})} className={inputCls}>
+                      <option value="">{refLoading ? '불러오는 중…' : '선택'}</option>
+                      {refdata.artists.map(a => (
+                        <option key={a.id} value={a.id}>{a.name} ({a.region || '-'})</option>
+                      ))}
+                      <option value="__new__">+ 직접 입력</option>
+                    </select>
+                  </label>
+                  {form.artist_id === '__new__' && (
+                    <div className="mt-2 space-y-2 pl-3 border-l-2 border-brand-line">
+                      <input type="text" required value={form.artist_name}
+                        onChange={e => setForm({...form, artist_name: e.target.value})}
+                        placeholder="작가/공방 이름" className={inputCls} />
+                      <input type="text" value={form.artist_region}
+                        onChange={e => setForm({...form, artist_region: e.target.value})}
+                        placeholder="지역 (선택, 예: 경기 이천)" className={inputCls} />
+                    </div>
+                  )}
+                </div>
+                <div className="block">
+                  <label className="block">
+                    <span className="text-brand-mute">카테고리 *</span>
+                    <select required value={form.category_id} onChange={e => setForm({...form, category_id: e.target.value})} className={inputCls}>
+                      <option value="">{refLoading ? '불러오는 중…' : '선택'}</option>
+                      {refdata.categories.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                      <option value="__new__">+ 직접 입력</option>
+                    </select>
+                  </label>
+                  {form.category_id === '__new__' && (
+                    <div className="mt-2 pl-3 border-l-2 border-brand-line">
+                      <input type="text" required value={form.category_name}
+                        onChange={e => setForm({...form, category_name: e.target.value})}
+                        placeholder="카테고리명 (예: 화병)" className={inputCls} />
+                    </div>
+                  )}
+                </div>
+                <label className="block sm:col-span-2">
+                  <span className="text-brand-mute">설명 *</span>
+                  <textarea required rows="3" value={form.description} onChange={e => setForm({...form, description: e.target.value})}
+                    className={inputCls} />
+                </label>
+              </div>
+            </Card>
+
+            {/* 스펙 (선택) */}
+            <Card className="p-6 space-y-4">
+              <h2 className="text-lg mb-2">상품 스펙 (선택)</h2>
+              <div className="grid sm:grid-cols-3 gap-4 text-sm">
+                <label className="block">
+                  <span className="text-brand-mute">사이즈</span>
+                  <input type="text" value={form.size} onChange={e => setForm({...form, size: e.target.value})}
+                    placeholder="지름 12cm × 높이 7cm" className={inputCls} />
+                </label>
+                <label className="block">
+                  <span className="text-brand-mute">소재</span>
+                  <input type="text" value={form.material} onChange={e => setForm({...form, material: e.target.value})}
+                    placeholder="백자토, 환원소성" className={inputCls} />
+                </label>
+                <label className="block">
+                  <span className="text-brand-mute">관리법</span>
+                  <input type="text" value={form.care} onChange={e => setForm({...form, care: e.target.value})}
+                    placeholder="식기세척기 가능" className={inputCls} />
+                </label>
+              </div>
+            </Card>
+
+            {msg && (
+              <p className={`text-sm px-4 py-3 rounded border ${
+                msg.type === 'success'
+                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                  : 'text-red-700 bg-red-50 border-red-200'
+              }`}>{msg.text}</p>
+            )}
+
+            <Button type="submit" size="lg" disabled={submitting} className="w-full">
+              {submitting ? '등록 중…' : '상품 등록'}
+            </Button>
+          </form>
+        </main>
+      );
+    }
+
+    // ========================================
+    // 🚀  App — Routes
+    // ========================================
+    function Routes() {
+      const { path } = useRouter();
+
+      // /product/:id
+      const productMatch = matchRoute('/product/:id', path);
+      if (productMatch) return <ProductDetailPage id={productMatch.id} />;
+
+      if (path === '/cart')             return <CartPage />;
+      if (path === '/checkout')         return <CheckoutPage />;
+      if (path === '/payment/success')  return <PaymentSuccessPage />;
+      if (path === '/payment/fail')     return <PaymentFailPage />;
+      if (path === '/mypage')           return <MyPage />;
+      if (path === '/admin')            return <AdminPage />;
+      if (path === '/' || path === '')  return <HomePage />;
+
+      // 404
+      return (
+        <main className="max-w-3xl mx-auto px-5 py-24 text-center">
+          <h1 className="text-2xl mb-3">페이지를 찾을 수 없습니다</h1>
+          <p className="text-brand-mute mb-8">요청하신 경로가 존재하지 않아요.</p>
+          <Link to="/"><Button>홈으로 돌아가기</Button></Link>
+        </main>
+      );
+    }
+
+    function App() {
+      return (
+        <Router>
+          <AuthProvider>
+            <ProductsProvider>
+              <CartProvider>
+                <div className="min-h-screen flex flex-col">
+                  <Header />
+                  <div className="flex-1">
+                    <Routes />
+                  </div>
+                  <Footer />
+                </div>
+                <AuthModal />
+              </CartProvider>
+            </ProductsProvider>
+          </AuthProvider>
+        </Router>
+      );
+    }
+
+    // ========================================
+    // 🌱  Render
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

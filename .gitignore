@@ -1,0 +1,24 @@
+# 의존성
+node_modules/
+
+# 환경변수 (절대 커밋 금지 — DB, JWT, Toss, ImageKit secret 포함)
+.env
+.env.local
+.env.*.local
+
+# 빌드/캐시
+.vercel/
+.next/
+dist/
+build/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# 테스트 산출물
+screenshots/
+*.tmp
